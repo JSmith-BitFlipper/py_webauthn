@@ -31,6 +31,7 @@ from cryptography.x509 import load_der_x509_certificate
 from OpenSSL import crypto
 
 from . import const
+from . import auth_extension_verifiers
 
 # Only supporting 'None', 'Basic', and 'Self Attestation' attestation types for now.
 AT_BASIC = 'Basic'
@@ -857,8 +858,7 @@ class WebAuthnAssertionResponse(object):
                  allow_credentials=None,
                  uv_required=False,
                  expected_assertion_client_extensions=DEFAULT_CLIENT_EXTENSIONS,
-                 expected_assertion_authenticator_extensions=DEFAULT_AUTHENTICATOR_EXTENSIONS,
-                 verify_authenticator_extensions_fn=None):
+                 expected_assertion_authenticator_extensions=DEFAULT_AUTHENTICATOR_EXTENSIONS):
         self.webauthn_user = webauthn_user
         self.assertion_response = assertion_response
         self.challenge = challenge
@@ -868,7 +868,6 @@ class WebAuthnAssertionResponse(object):
         self.expected_assertion_client_extensions = expected_assertion_client_extensions
         self.expected_assertion_authenticator_extensions = \
             expected_assertion_authenticator_extensions
-        self.verify_authenticator_extensions_fn = verify_authenticator_extensions_fn
 
     def verify(self):
         try:
@@ -1035,8 +1034,8 @@ class WebAuthnAssertionResponse(object):
                 if not _verify_client_extensions(ace, self.expected_assertion_client_extensions):
                     raise AuthenticationRejectedException(
                         'Unable to verify client extensions.')
-            if self.verify_authenticator_extensions_fn and \
-               not self.verify_authenticator_extensions_fn(
+
+            if not _verify_authenticator_extensions(
                     c, self.expected_assertion_authenticator_extensions):
                 raise AuthenticationRejectedException(
                     'Unable to verify authenticator extensions.')
@@ -1376,3 +1375,25 @@ def _verify_signature(public_key, alg, data, signature):
         public_key.verify(signature, data, padding, SHA256())
     else:
         raise NotImplementedError()
+
+def _verify_authenticator_extensions(client_data, expected_authenticator_extensions):
+    client_data_extensions = client_data.get('clientExtensions', 
+                                             DEFAULT_AUTHENTICATOR_EXTENSIONS)
+
+    # Make sure that the extensions dicts have the same keys
+    if client_data_extensions.keys() != expected_authenticator_extensions.keys():
+        return False
+
+    for key in client_data_extensions.keys():
+        try:
+            verifier_fn = auth_extension_verifiers.get_verifier(key)
+
+            # Verify this extension
+            if not verifier_fn(client_data_extensions[key], 
+                               expected_authenticator_extensions[key]):
+                return False
+        except KeyError:
+            return False
+
+    # All passed
+    return True
